@@ -3,8 +3,9 @@
             [incanter.core :as incanter]
             [incanter.charts :as icharts]
             [clojure.string :as string]
-            [clj-time.core :as t]
-            [clj-time.format :as f])
+            [clj-time.core :as tt]
+            [clj-time.format :as tf]
+            [clj-time.coerce :as tc])
   (:gen-class))
 
 (def headers [:remote_addr
@@ -21,17 +22,41 @@
 
 (def line-regex  #"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})? - - \[(.*)\] \"(\w+) ([^\"]*)\"(\d{3}) (\d+) \"([^\"]*)\" \"([^\"]*)\" \"([^\"]*)\"\[(.*)\] \[(.*)\]")
 
-(def date-format "dd/MMM/yyyy:h:m:s Z")
-(def date-formatter (f/formatter date-format))
+(def datetime-format "dd/MMM/yyyy:h:m:s Z")
 
-(defn parse-date
-  "Returns a formatted DateTime object or nil from a date string."
-  ([^String date] (parse-date date date-formatter))
+(defn date-formatter
+  [format]
+  (tf/formatter format))
+
+(defn to-millisec
+  "Returns the unix epoch milliseconds from date."
+  [^String date]
+  (try
+    (tc/to-long (tf/parse (date-formatter datetime-format) date))
+    (catch Exception ex
+      nil)))
+
+(defn parse-datetime
+  "Returns a formatted date or nil from a date string."
+  ([^String date] (parse-datetime date (date-formatter datetime-format)))
   ([^String date fmtt]
    (try
-     (f/parse fmtt date)
+     (tf/parse fmtt date)
      (catch Exception ex
        nil))))
+
+(defn ymd
+  [date]
+  (first (string/split date #":")))
+
+(defn hour
+  [date-string]
+  (if-let [[ymd h &rest ] (string/split date-string #":")]
+    h))
+
+(defn same-day
+  [^String date1 ^String date2]
+  (= 0 (compare (ymd date1) (ymd date2))))
 
 (defn parse-line
   "Returns a map where keys are line-keys and values are the result of
@@ -92,25 +117,56 @@
   (->> log-files
        lazy-read-files
        (map parse-line)
-       (incanter/dataset headers)))
+       (remove nil?)
+       (incanter/to-dataset)))
 
+(defn load-from-dir
+  [dir]
+  (load-logs (map #(str dir %) (ls-dir dir file-matches desc))))
+
+
+;;  === Incanter datasets ===
+
+(defn map-ds
+  [in-col out-col f ds]
+  (incanter/dataset [out-col] (remove nil? (incanter/$map f in-col ds))))
+
+;;       = Traffic =
+;; 1. traffic per [day week month]
+;; 2. overlay traffic
+
+(defn visits-per-hour
+  [day-ds]
+  (->> day-ds
+       (map-ds :time_local :hour hour)
+       (incanter/$group-by :hour)
+       (map (fn [[k v]] (assoc k :visits (incanter/nrow v))))
+       (sort-by :hour)
+       incanter/to-dataset))
+
+(defn traffic
+  [ds date metric]
+  (cond (= metric :day)  (visits-per-hour (incanter/$where {:time_local {:fn #(same-day % date)}} ds))
+        (= metric :week) "traffic per week"
+        (= metric :month) "traffic pet month"))
+
+;;      = Pages =
+;; 1. popular pages
+
+;;      = Referrals =
+;; 1. top referrals
+
+;;     = Technical =
+;; 1. devices
+;; 2. response code
+;; 3. response time
 
 
 (comment
+  "e.g: traffic for a given day"
+  (-> (load-from-dir "nginx/")
+      (traffic "08/Mar/2016:23:37:02 +0000" :day)
+      (incanter/with-data (icharts/bar-chart :hour :visits))
+      incanter/view)
 
-  (defn lines-seq
-    [files]
-    (when-let [f (first files)]
-      (cons (line-seq (io/reader f)) (lazy-seq (lines-seq (rest files))))))
-
-  (defn load-logs
-    [log-files]
-    (->> (map )
-         ))
-
-  #(str dir %) (ls-dir dir)
-
-  (defn -main
-    "I don't do a whole lot ... yet."
-    [& args]
-    (println "Hello, World!")))
+  )
