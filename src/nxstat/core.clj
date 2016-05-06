@@ -22,7 +22,8 @@
 
 (def line-regex  #"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})? - - \[(.*)\] \"(\w+) ([^\"]*)\"(\d{3}) (\d+) \"([^\"]*)\" \"([^\"]*)\" \"([^\"]*)\"\[(.*)\] \[(.*)\]")
 
-(def datetime-format "dd/MMM/yyyy:h:m:s Z")
+(def datetime-format "dd/MMM/yyyy:H:m:s")
+(def datetimezone-format "dd/MMM/yyyy:H:m:s Z")
 
 (defn date-formatter
   [format]
@@ -30,15 +31,16 @@
 
 (defn to-millisec
   "Returns the unix epoch milliseconds from date."
-  [^String date]
-  (try
-    (tc/to-long (tf/parse (date-formatter datetime-format) date))
-    (catch Exception ex
-      nil)))
+  ([^String date] (to-millisec date (date-formatter datetimezone-format)))
+  ([^String date formatter]
+   (try
+     (tc/to-long (tf/parse formatter date))
+     (catch Exception ex
+       nil))))
 
 (defn parse-datetime
   "Returns a formatted date or nil from a date string."
-  ([^String date] (parse-datetime date (date-formatter datetime-format)))
+  ([^String date] (parse-datetime date (date-formatter datetimezone-format)))
   ([^String date fmtt]
    (try
      (tf/parse fmtt date)
@@ -49,9 +51,14 @@
   [date]
   (first (string/split date #":")))
 
+(defn ymdh
+  [date-string]
+  (if-let [[ymd h _] (string/split date-string #":")]
+    (str ymd ":" h ":00:00")))
+
 (defn hour
   [date-string]
-  (if-let [[ymd h &rest ] (string/split date-string #":")]
+  (if-let [[ymd h &rest] (string/split date-string #":")]
     h))
 
 (defn same-day
@@ -136,17 +143,20 @@
 ;; 2. overlay traffic
 
 (defn visits-per-hour
-  [day-ds]
-  (->> day-ds
-       (map-ds :time_local :hour hour)
-       (incanter/$group-by :hour)
-       (map (fn [[k v]] (assoc k :visits (incanter/nrow v))))
-       (sort-by :hour)
-       incanter/to-dataset))
+  ([day-ds & [map-fn]]
+   (let [map-fn (or map-fn hour)]
+     (->> day-ds
+          (map-ds :time_local :hour map-fn)
+          (incanter/$group-by :hour)
+          (map (fn [[k v]] (assoc k :visits (incanter/nrow v))))
+          (sort-by :hour)
+          incanter/to-dataset))))
 
 (defn traffic
-  [ds date metric]
-  (cond (= metric :day)  (visits-per-hour (incanter/$where {:time_local {:fn #(same-day % date)}} ds))
+  [ds date metric & {:keys [as-time-series]}]
+  (cond (= metric :day) (visits-per-hour (incanter/$where {:time_local {:fn #(same-day % date)}} ds)
+                                         (and as-time-series #(to-millisec (ymdh %)))
+                                         )
         (= metric :week) "traffic per week"
         (= metric :month) "traffic pet month"))
 
@@ -163,10 +173,20 @@
 
 
 (comment
-  "e.g: traffic for a given day"
-  (-> (load-from-dir "nginx/")
+  (def log-ds (load-from-dir "nginx/"))
+
+  "e.g: traffic for a given day as time-series-plot"
+  (-> log-ds
+      (traffic "08/Mar/2016:23:37:02 +0000" :day :as-time-series true)
+      (incanter/with-data (icharts/time-series-plot :hour :visits))
+      incanter/view
+      )
+
+  "e.g: traffic for a given day as bar chart"
+  (-> log-ds
       (traffic "08/Mar/2016:23:37:02 +0000" :day)
       (incanter/with-data (icharts/bar-chart :hour :visits))
-      incanter/view)
+      incanter/view
+      )
 
   )
