@@ -22,8 +22,7 @@
 
 (def line-regex  #"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})? - - \[(.*)\] \"(\w+) ([^\"]*)\"(\d{3}) (\d+) \"([^\"]*)\" \"([^\"]*)\" \"([^\"]*)\"\[(.*)\] \[(.*)\]")
 
-(def datetime-format "dd/MMM/yyyy:H:m:s")
-(def datetimezone-format "dd/MMM/yyyy:H:m:s Z")
+(def datetime-format "dd/MMM/yyyy:H:m:s Z")
 
 (defn date-formatter
   [format]
@@ -31,39 +30,84 @@
 
 (defn to-millisec
   "Returns the unix epoch milliseconds from date."
-  ([^String date] (to-millisec date (date-formatter datetimezone-format)))
+  ([^String date] (to-millisec date (date-formatter datetime-format)))
   ([^String date formatter]
    (try
      (tc/to-long (tf/parse formatter date))
      (catch Exception ex
        nil))))
 
-(defn parse-datetime
-  "Returns a formatted date or nil from a date string."
-  ([^String date] (parse-datetime date (date-formatter datetimezone-format)))
-  ([^String date fmtt]
-   (try
-     (tf/parse fmtt date)
-     (catch Exception ex
-       nil))))
+(defn parse-date
+  [^String date formatter]
+  (try
+    (tf/parse formatter date)
+    (catch Exception ex
+      nil)))
 
-(defn ymd
-  [date]
-  (first (string/split date #":")))
-
-(defn ymdh
+(defn explode-date
   [date-string]
-  (if-let [[ymd h _] (string/split date-string #":")]
-    (str ymd ":" h ":00:00")))
+  (let [parsed (parse-date date-string (date-formatter datetime-format) )]
+    {:y (.get (.year parsed))
+     :m (.get (.monthOfYear parsed))
+     :w (.get (.weekOfWeekyear parsed))
+     :d (.get (.dayOfMonth parsed))
+     :h (.get (.hourOfDay parsed))
+     :i (.get (.minuteOfHour parsed))
+     :s (.get (.secondOfMinute parsed))}))
 
-(defn hour
-  [date-string]
-  (if-let [[ymd h &rest] (string/split date-string #":")]
-    h))
 
-(defn same-day
+(defn translate-date
+  "Formats a given date to the specified granularity.
+
+  gr - [keyword] one of :year :month :day :minute :hour :second"
+  [date-str gr]
+  (let [{:keys [y m d h i s]} (explode-date date-str)
+        formatter (date-formatter datetime-format)]
+    (cond (= gr :year)   (tf/unparse formatter (tt/date-midnight y))
+          (= gr :month)  (tf/unparse formatter (tt/date-midnight y m))
+          (= gr :day)    (tf/unparse formatter (tt/date-time y m d))
+          (= gr :hour)   (tf/unparse formatter (tt/date-time y m d h))
+          (= gr :minute) (tf/unparse formatter (tt/date-time y m d h i))
+          (= gr :second) (tf/unparse formatter (tt/date-time y m d h i s)))))
+
+(defn dates-cmp-key
+  [^String date1 ^String date2 & fields]
+  (let [p1 (explode-date date1)
+        p2 (explode-date date2)]
+    (loop [fs fields
+           rez true]
+      (if (seq fs)
+        (recur (rest fs) (and rez (= (get p1 (first fs)) (get p2 (first fs)))))
+        rez))))
+
+(defn same-day?
   [^String date1 ^String date2]
-  (= 0 (compare (ymd date1) (ymd date2))))
+  (dates-cmp-key date1 date2 :y :m :d))
+
+(defn same-week?
+  [^String date1 ^String date2]
+  (dates-cmp-key date1 date2 :y :m :w))
+
+(defn same-month?
+  [^String date1 ^String date2]
+  (dates-cmp-key date1 date2 :y :m))
+
+(defn same-year?
+  [^String date1 ^String date2]
+  (dates-cmp-key date1 date2 :y))
+
+(defn within?
+  [^String from ^String to ^String within]
+  (let [from-date (parse-date from (date-formatter datetime-format))
+        to-date (parse-date to (date-formatter datetime-format))
+        within-date (parse-date within (date-formatter datetime-format) )]
+    (tt/within? (tt/interval from-date to-date)
+                within-date)))
+
+(defn now
+  []
+  (tf/unparse (date-formatter datetime-format)
+              (tt/now)))
 
 (defn parse-line
   "Returns a map where keys are line-keys and values are the result of
@@ -141,24 +185,44 @@
 ;;       = Traffic =
 ;; 1. traffic per [day week month]
 ;; 2. overlay traffic
+;; 3. overview with granularity [day week month]
+
+(defn visits
+  [ds grp-by]
+  (->> ds
+       (incanter/$group-by grp-by)
+       (map (fn [[k v]] (assoc k :visits (incanter/nrow v))))
+       (sort-by grp-by)
+       incanter/to-dataset))
 
 (defn visits-per-hour
-  ([day-ds & [map-fn]]
-   (let [map-fn (or map-fn hour)]
-     (->> day-ds
-          (map-ds :time_local :hour map-fn)
-          (incanter/$group-by :hour)
-          (map (fn [[k v]] (assoc k :visits (incanter/nrow v))))
-          (sort-by :hour)
-          incanter/to-dataset))))
+  [ds]
+  (visits (map-ds :time_local :hour #(to-millisec (translate-date % :hour)) ds) :hour))
+
+(defn visits-per-day
+  [ds]
+  (visits (map-ds :time_local :day #(to-millisec (translate-date % :day)) ds) :day))
+
+(defn visits-per-month
+  [ds]
+  (visits (map-ds :time_local :month #(to-millisec (translate-date % :month)) ds) :month))
 
 (defn traffic
-  [ds date metric & {:keys [as-time-series]}]
-  (cond (= metric :day) (visits-per-hour (incanter/$where {:time_local {:fn #(same-day % date)}} ds)
-                                         (and as-time-series #(to-millisec (ymdh %)))
-                                         )
-        (= metric :week) "traffic per week"
-        (= metric :month) "traffic pet month"))
+  [ds date metric]
+  (cond (= metric :day)   (visits-per-hour (incanter/$where {:time_local {:fn #(same-day? % date)}} ds))
+        (= metric :week)  (visits-per-day  (incanter/$where {:time_local {:fn #(same-week? % date)}} ds))
+        (= metric :month) (visits-per-day  (incanter/$where {:time_local {:fn #(same-month? % date)}} ds))
+        (= metric :year)  (visits-per-month (incanter/$where {:time_local {:fn #(same-year? % date)}} ds))))
+
+(defn overview
+  [ds interval granularity]
+  (let [[from to] interval
+        interval-ds (incanter/$where {:time_local {:fn #((partial within? from (or to (now))) %)}} ds)]
+    (cond (= granularity :hour)  (visits-per-hour interval-ds)
+          (= granularity :day)   (visits-per-day  interval-ds)
+          (= granularity :week)  (visits-per-day  interval-ds)
+          (= granularity :month) (visits-per-month  interval-ds))))
+
 
 ;;      = Pages =
 ;; 1. popular pages
@@ -175,17 +239,62 @@
 (comment
   (def log-ds (load-from-dir "nginx/"))
 
-  "e.g: traffic for a given day as time-series-plot"
-  (-> log-ds
-      (traffic "08/Mar/2016:23:37:02 +0000" :day :as-time-series true)
-      (incanter/with-data (icharts/time-series-plot :hour :visits))
-      incanter/view
-      )
+  "=== Traffic ==="
 
-  "e.g: traffic for a given day as bar chart"
+  "e.g: traffic for a day as time-series-plot"
+  (-> log-ds
+      (traffic "08/Mar/2016:23:37:02 +0000" :day)
+      (incanter/with-data (icharts/time-series-plot :hour :visits))
+      incanter/view)
+
+  "e.g: traffic for a day as bar chart"
   (-> log-ds
       (traffic "08/Mar/2016:23:37:02 +0000" :day)
       (incanter/with-data (icharts/bar-chart :hour :visits))
+      incanter/view)
+
+  "e.g: traffic for a week as time-series-plot"
+  (-> log-ds
+      (traffic "08/Mar/2016:23:37:02 +0000" :week)
+      (incanter/with-data (icharts/time-series-plot :day :visits))
+      incanter/view)
+
+  "e.g: traffic for a week as bar chart"
+  (-> log-ds
+      (traffic "08/Apr/2016:23:37:02 +0000" :week)
+      (incanter/with-data (icharts/bar-chart :day :visits))
+      incanter/view)
+
+  "e.g: traffic for a month as time-series-plot"
+  (-> log-ds
+      (traffic "18/Apr/2016:23:37:02 +0000" :month)
+      (incanter/with-data (icharts/time-series-plot :day :visits))
+      incanter/view)
+
+  "e.g: traffic for a year as time-series-plot"
+  (-> log-ds
+      (traffic "18/Apr/2016:23:37:02 +0000" :year)
+      (incanter/with-data (icharts/time-series-plot :month :visits))
+      incanter/view)
+
+  "=== Overview ==="
+
+  "e.g: traffic overview, granularity hour"
+  (-> log-ds
+      (overview ["18/Mar/2016:23:37:02 +0000"] :hour)
+      (incanter/with-data (icharts/time-series-plot :hour :visits))
+      incanter/view)
+
+  "e.g: traffic overview, granularity day"
+  (-> log-ds
+      (overview ["18/Apr/2016:23:37:02 +0000"] :day)
+      (incanter/with-data (icharts/time-series-plot :day :visits))
+      incanter/view)
+
+  "e.g: traffic overview, granularity week"
+  (-> log-ds
+      (overview ["18/Apr/2016:23:37:02 +0000"] :week)
+      (incanter/with-data (icharts/time-series-plot :day :visits))
       incanter/view
       )
 
