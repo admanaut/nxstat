@@ -77,11 +77,12 @@
   [^String date1 ^String date2 & fields]
   (let [p1 (explode-date date1)
         p2 (explode-date date2)]
-    (loop [fs fields
-           rez true]
-      (if (seq fs)
-        (recur (rest fs) (and rez (= (get p1 (first fs)) (get p2 (first fs)))))
-        rez))))
+    (when-let [fseq (seq fields)]
+      (loop [fs fseq
+             rez true]
+        (if-let [[field & rfields] (seq fs)]
+            (recur rfields (and rez (= (field p1) (field p2))))
+          rez)))))
 
 (defn same-day?
   "Returns true if dates are the same day of the month of the year, false otherwise."
@@ -116,3 +117,8 @@
   []
   "Returns today's date."
   (tf/unparse (formatter datetime-format) (tt/now)))
+
+(defn beginning
+  []
+  "Returns the datetime of the beginning of the unix epoch."
+  (tf/unparse (formatter datetime-format) (tt/date-time 1970 1 1)))

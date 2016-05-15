@@ -1,56 +1,82 @@
 (ns nxstat.stats
   (:require [nxstat.datetime :as nxdt]
-            [incanter.core :as incanter]))
+            [com.rpl.specter :as specter]))
 
 (defn map-ds
-  [in-col out-col f ds]
-  (incanter/dataset [out-col] (remove nil? (incanter/$map f in-col ds))))
+  [ds f col]
+  (specter/transform [specter/ALL col] f ds))
+
+(defn sel-ds
+  [ds & cols]
+  (map #(select-keys % cols) ds))
+
+(defn filter-ds-interval
+  [ds from to]
+  (specter/select [specter/ALL #((partial nxdt/within? from to) %)] ds))
 
 ;; = Traffic =
 
 (defn visits
-  [ds grp-by]
+  [ds col]
   (->> ds
-       (incanter/$group-by grp-by)
-       (map (fn [[k v]] (assoc k :visits (incanter/nrow v))))
-       (sort-by grp-by)
-       incanter/to-dataset))
+       (group-by col)
+       (map (fn [[k v]] {col k :count (count v)}))
+       (sort-by col)))
 
 (defn visits-per-hour
   [ds]
-  (visits (map-ds :time_local :hour #(nxdt/to-millisec (nxdt/translate-date % :hour)) ds) :hour))
+  (visits
+   (-> ds
+       (map-ds #(nxdt/to-millisec (nxdt/translate-date % :hour)) :time_local)
+       (sel-ds :time_local))
+   :time_local))
 
 (defn visits-per-day
   [ds]
-  (visits (map-ds :time_local :day #(nxdt/to-millisec (nxdt/translate-date % :day)) ds) :day))
+  (visits
+   (-> ds
+       (map-ds #(nxdt/to-millisec (nxdt/translate-date % :day)) :time_local)
+       (sel-ds :time_local))
+   :time_local))
 
 (defn visits-per-month
   [ds]
-  (visits (map-ds :time_local :month #(nxdt/to-millisec (nxdt/translate-date % :month)) ds) :month))
+  (visits
+   (-> ds
+       (map-ds #(nxdt/to-millisec (nxdt/translate-date % :month)) :time_local)
+       (sel-ds :time_local))
+   :time_local))
 
 (defn traffic
   [ds date metric]
-  (cond (= metric :day)   (visits-per-hour (incanter/$where {:time_local {:fn #(nxdt/same-day? % date)}} ds))
-        (= metric :week)  (visits-per-day  (incanter/$where {:time_local {:fn #(nxdt/same-week? % date)}} ds))
-        (= metric :month) (visits-per-day  (incanter/$where {:time_local {:fn #(nxdt/same-month? % date)}} ds))
-        (= metric :year)  (visits-per-month (incanter/$where {:time_local {:fn #(nxdt/same-year? % date)}} ds))))
+  (cond (= metric :day)   (visits-per-hour (specter/select [specter/ALL #(nxdt/same-day? (:time_local %) date)] ds))
+        (= metric :week)  (visits-per-day (specter/select [specter/ALL #(nxdt/same-week? (:time_local %) date)] ds))
+        (= metric :month) (visits-per-day (specter/select [specter/ALL #(nxdt/same-month? (:time_local %) date)] ds))
+        (= metric :year)  (visits-per-month (specter/select [specter/ALL #(nxdt/same-year? (:time_local %) date)] ds))))
 
 (defn overview
-  [ds interval granularity]
-  (let [[from to] interval
-        interval-ds (incanter/$where {:time_local {:fn #((partial nxdt/within? from (or to (nxdt/now))) %)}} ds)]
+  [ds [from to] granularity]
+  (let [interval-ds (specter/select
+                     [specter/ALL
+                      #((partial nxdt/within?
+                                 (or from (nxdt/beginning))
+                                 (or to (nxdt/now)))
+                        (:time_local %))]
+                     ds)]
     (cond (= granularity :hour)  (visits-per-hour interval-ds)
           (= granularity :day)   (visits-per-day  interval-ds)
           (= granularity :week)  (visits-per-day  interval-ds)
           (= granularity :month) (visits-per-month  interval-ds))))
 
-;;      = Pages =
-;; 1. popular pages
 
-;;      = Referrals =
+;; TODO
+;; = Pages =
+;; 1. top pages
+
+;;  = Referrals =
 ;; 1. top referrals
 
-;;     = Technical =
+;;  = Technical =
 ;; 1. devices
 ;; 2. response code
 ;; 3. response time

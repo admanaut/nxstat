@@ -3,83 +3,81 @@
             [nxstat.log :as log]
             [nxstat.stats :as stats]
             [incanter.core :as incanter]
-            [incanter.charts :as icharts])
+            [incanter.charts :as icharts]
+            [com.rpl.specter :as specter])
   (:gen-class))
 
 
 (comment
 
-  (def log-ds (log/load "nginx/"))
+  (def log-data (log/load-access-logs "nginx/"))
+
 
   "=== Traffic ==="
 
-  "traffic in day as time-series-plot"
-  (-> log-ds
+  "traffic in a day as time-series-plot"
+  (-> log-data
       (stats/traffic "08/Mar/2016:23:37:02 +0000" :day)
-      (incanter/with-data (icharts/time-series-plot :hour :visits :legend true :title "Traffic for 08/Mar/2016"))
+      incanter/to-dataset
+      (incanter/with-data (icharts/time-series-plot :time_local :count :title "Traffic for 08/Mar/2016"))
       incanter/view)
 
   "traffic in a day as bar chart"
-  (-> log-ds
+  (-> log-data
       (stats/traffic "08/Mar/2016:23:37:02 +0000" :day)
-      (incanter/with-data (icharts/bar-chart :hour :visits :title "Traffic for 08/Mar/2016"))
+      incanter/to-dataset
+      (incanter/with-data (icharts/bar-chart :time_local :count :title "Traffic for 08/Mar/2016"))
       incanter/view)
 
   "traffic in a week as time-series-plot"
-  (-> log-ds
+  (-> log-data
       (stats/traffic "08/Mar/2016:23:37:02 +0000" :week)
-      (incanter/with-data (icharts/time-series-plot :day :visits))
+      incanter/to-dataset
+      (incanter/with-data (icharts/time-series-plot :time_local :count))
       incanter/view)
 
   "traffic in a week as bar chart"
-  (-> log-ds
+  (-> log-data
       (stats/traffic "08/Apr/2016:23:37:02 +0000" :week)
-      (incanter/$map )
-      (incanter/with-data (icharts/bar-chart :day :visits))
-      incanter/view)
-
-  "traffic in a week as bar chart grouped by day"
-  (-> log-ds
-      (stats/traffic "08/Apr/2016:23:37:02 +0000" :week)
-      (incanter/with-data (icharts/bar-chart :day :visits :legend true))
+      incanter/to-dataset
+      (incanter/with-data (icharts/bar-chart :time_local :count))
       incanter/view)
 
   "traffic in a month as time-series-plot"
-  (-> log-ds
+  (-> log-data
       (stats/traffic "18/Apr/2016:23:37:02 +0000" :month)
-      (incanter/with-data (icharts/time-series-plot :day :visits))
+      incanter/to-dataset
+      (incanter/with-data (icharts/time-series-plot :time_local :count))
       incanter/view)
-
-  (-> log-ds
-      (stats/traffic "18/Apr/2016:23:37:02 +0000" :month)
-      (incanter/with-data (icharts/line-chart :day :visits :group-by :day))
-      incanter/view)
-
 
   "traffic in a year as time-series-plot"
-  (-> log-ds
+  (-> log-data
       (stats/traffic "18/Apr/2016:23:37:02 +0000" :year)
-      (incanter/with-data (icharts/time-series-plot :month :visits))
+      incanter/to-dataset
+      (incanter/with-data (icharts/time-series-plot :time_local :count))
       incanter/view)
 
   "=== Overview ==="
 
   "traffic overview, granularity hour"
-  (-> log-ds
+  (-> log-data
       (stats/overview ["18/Mar/2016:23:37:02 +0000"] :hour)
-      (incanter/with-data (icharts/time-series-plot :hour :visits))
+      incanter/to-dataset
+      (incanter/with-data (icharts/time-series-plot :time_local :count))
       incanter/view)
 
   "traffic overview, granularity day"
-  (-> log-ds
+  (-> log-data
       (stats/overview ["18/Apr/2016:23:37:02 +0000"] :day)
-      (incanter/with-data (icharts/time-series-plot :day :visits))
+      incanter/to-dataset
+      (incanter/with-data (icharts/time-series-plot :time_local :count))
       incanter/view)
 
   "traffic overview, granularity week"
-  (-> log-ds
+  (-> log-data
       (stats/overview ["18/Apr/2016:23:37:02 +0000"] :week)
-      (incanter/with-data (icharts/time-series-plot :day :visits))
+      incanter/to-dataset
+      (incanter/with-data (icharts/time-series-plot :time_local :count))
       incanter/view)
 
   )

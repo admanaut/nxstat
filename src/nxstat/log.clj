@@ -1,6 +1,5 @@
 (ns nxstat.log
-  (:require [clojure.java.io :as io]
-            [incanter.core :as incanter]))
+  (:require [clojure.java.io :as io]))
 
 (def headers [:remote_addr
               :time_local
@@ -22,11 +21,9 @@
 (def desc #(compare %2 %1))
 
 (defn parse-line
-  "Returns a map where keys are line-keys and values are the result of
-  re-find by line-re in line. Returns nil if no matches found."
   ([^String line] (parse-line line line-regex headers))
   ([^String line ^String line-re line-keys]
-   (if-let [matches (re-find line-re line)]
+   (when-let [matches (re-find line-re line)]
      (apply hash-map (interleave line-keys (next matches))))))
 
 (defn ls-dir
@@ -73,20 +70,25 @@
       (lazy-files (lazy-read-lines (first fx)) (rest fx)))))
 
 
-(defn load-files
-  "Reads, parses and formats each line of text from each log-file
-  and returns a loaded incanter dataset."
+(defn- load-files
+  "Reads and parses each line of text from each log-file
+  returning a sequence of sequences of rows."
   [log-files]
   (->> log-files
+       (take-while #(.isFile (io/file %)))
        lazy-read-files
        (map parse-line)
-       (remove nil?)
-       (incanter/to-dataset)))
+       (remove nil?)))
 
-(defn load
-  ""
-  ([location] (load location access-log-matcher desc))
-  ([location file-matcher sorter]
-   (let [file (io/file location)]
-     (cond (.isDirectory file) (load-files (map #(str (add-slash location) %) (ls-dir file file-matcher sorter)))
-           (.isFile file)      (load-files [file])))))
+(defn load-file
+  "Returns a sequence of sequences of parsed lines"
+  [file]
+  (load-files [file]))
+
+(defn load-dir
+  [dir matcher sorter]
+  (load-files (map #(str (add-slash dir) %) (ls-dir dir matcher sorter))))
+
+(defn load-access-logs
+  [dir]
+  (load-dir dir access-log-matcher desc))

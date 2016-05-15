@@ -5,7 +5,8 @@
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :dependencies [[org.clojure/clojure "1.7.0"]
                  [incanter "1.5.7"]
-                 [clj-time "0.11.0"]]
+                 [clj-time "0.11.0"]
+                 [com.rpl/specter "0.10.0"]]
   :main ^:skip-aot nxstat.core
   :target-path "target/%s"
   :profiles {:uberjar {:aot :all}})
